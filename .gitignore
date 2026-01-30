@@ -1,0 +1,34 @@
+# Abaqus generated files
+*.odb
+*.prt
+*.com
+*.sim
+*.log
+*.dat
+*.msg
+*.sta
+*.lck
+*.ipm
+*.rpy*
+abq*
+*.pac
+*.res
+*.stt
+*.mdl
+
+# Fortran build files
+*.o
+*.exe
+*.mod
+
+# Python
+__pycache__/
+*.pyc
+
+# Simulation generated input files (kept by generate_inp.py)
+sim/cantilever_*.inp
+sim/*.exception
+
+# Plots (Optional, comment out if you want to track them)
+# *.png
+# *.html
