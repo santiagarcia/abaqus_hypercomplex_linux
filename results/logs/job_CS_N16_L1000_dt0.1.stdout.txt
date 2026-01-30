@@ -1,0 +1,27 @@
+Analysis initiated from SIMULIA established products
+Abaqus JOB job_CS_N16_L1000_dt0.1
+Abaqus 2021.HF5
+Begin Compiling Abaqus/Standard User Subroutines
+Fri 30 Jan 2026 01:30:34 PM CST
+ Intel(R) Fortran 2021.10.0-1769.02
+End Compiling Abaqus/Standard User Subroutines
+Begin Linking Abaqus/Standard User Subroutines
+GNU ld (GNU Binutils for Ubuntu) 2.34
+End Linking Abaqus/Standard User Subroutines
+Fri 30 Jan 2026 01:30:38 PM CST
+Begin Analysis Input File Processor
+Fri 30 Jan 2026 01:30:38 PM CST
+Run pre
+Fri 30 Jan 2026 01:30:39 PM CST
+End Analysis Input File Processor
+Begin Abaqus/Standard Analysis
+Fri 30 Jan 2026 01:30:39 PM CST
+Run standard
+Fri 30 Jan 2026 01:30:40 PM CST
+End Abaqus/Standard Analysis
+Begin SIM Wrap-up
+Fri 30 Jan 2026 01:30:40 PM CST
+Run SMASimUtility
+Fri 30 Jan 2026 01:30:40 PM CST
+End SIM Wrap-up
+Abaqus JOB job_CS_N16_L1000_dt0.1 COMPLETED

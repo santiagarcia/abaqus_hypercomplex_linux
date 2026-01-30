@@ -192,31 +192,52 @@ def parse_msg_file(msg_file):
     return iteration_history
 
 def main():
-    print("Reading simulation data...")
-    inc_uel = parse_dat_file("../sim/cantilever_uel.dat")
-    iter_uel = parse_msg_file("../sim/cantilever_uel.msg")
+    if len(sys.argv) > 1:
+        sim_dir = sys.argv[1]
+        tag = sys.argv[2] if len(sys.argv) > 2 else "default"
+    else:
+        # Fallback to hardcoded relative path for backward compatibility
+        sim_dir = os.path.join(os.path.dirname(__file__), "../sim")
+        tag = "default" # or infer empty
+        
+    print(f"Reading simulation data from {sim_dir} with tag {tag}...")
     
-    inc_fd = parse_dat_file("../sim/cantilever_fd.dat")
-    iter_fd = parse_msg_file("../sim/cantilever_fd.msg")
-    
-    inc_hc = parse_dat_file("../sim/cantilever_complex.dat")
-    iter_hc = parse_msg_file("../sim/cantilever_complex.msg")
-    
-    inc_ex = parse_dat_file("../sim/cantilever_exact.dat")
-    iter_ex = parse_msg_file("../sim/cantilever_exact.msg")
+    # helper to construct path
+    def get_path(variant, ext):
+        # if tag is present, we expect cantilever_{tag}_{variant}.{ext}
+        
+        # Try constructed name first (always use tag, even if default, as run_comparison.sh produces cantilever_default_...)
+        name = f"cantilever_{tag}_{variant}.{ext}"
+        p = os.path.join(sim_dir, name)
+        
+        if not os.path.exists(p):
+            # Try alternative (legacy/simplified naming)
+            p_alt = os.path.join(sim_dir, f"cantilever_{variant}.{ext}")
+            if os.path.exists(p_alt): return p_alt
+            
+        return p
+
+    inc_uel = parse_dat_file(get_path("uel", "dat"))
+    inc_fd = parse_dat_file(get_path("fd", "dat"))
+    inc_hc = parse_dat_file(get_path("complex", "dat"))
+    inc_ex = parse_dat_file(get_path("exact", "dat"))
+    inc_ot = parse_dat_file(get_path("otis", "dat"))
     
     print(f"Loaded Hyperdual: {len(inc_uel)} increments")
     print(f"Loaded FD: {len(inc_fd)} increments")
     print(f"Loaded Complex: {len(inc_hc)} increments")
     print(f"Loaded Exact: {len(inc_ex)} increments")
+    print(f"Loaded Otis: {len(inc_ot)} increments")
     
     has_hc = len(inc_hc) > 0
     has_ex = len(inc_ex) > 0
+    has_ot = len(inc_ot) > 0
     
     # Determine frames (using smallest available count to sync)
     lens = [len(inc_uel), len(inc_fd)]
     if has_hc: lens.append(len(inc_hc))
     if has_ex: lens.append(len(inc_ex))
+    if has_ot: lens.append(len(inc_ot))
     num_frames = min(lens)
     
     if num_frames == 0:
@@ -228,7 +249,7 @@ def main():
         rows=2, cols=1,
         row_heights=[0.7, 0.3],
         specs=[[{'type': 'scene'}], [{'type': 'xy'}]],
-        subplot_titles=("Beam Deflection (Blue:HD, Red:FD, Green:CS)", "Tip Deflection Error (vs Exact)")
+        subplot_titles=("Beam Deflection (Blue:HD, Red:FD, Green:CS, Purple:Otis)", "Tip Deflection Error (vs Exact)")
     )
     
     # Calculate Axis Ranges
@@ -247,6 +268,7 @@ def main():
     err_hd = []
     err_fd = []
     err_cs = []
+    err_ot = []
     
     inc_indices = list(range(num_frames))
     
@@ -258,12 +280,13 @@ def main():
             err_hd.append(None)
             err_fd.append(None)
             err_cs.append(None)
+            err_ot.append(None)
             continue
             
         # Get Exact Tip Displacement (U2) for this increment
         ex_nodes = inc_ex[k]['nodes']
         if not ex_nodes:
-             err_hd.append(None); err_fd.append(None); err_cs.append(None); continue
+             err_hd.append(None); err_fd.append(None); err_cs.append(None); err_ot.append(None); continue
              
         tip_id = max(ex_nodes.keys())
         u2_ex = ex_nodes[tip_id]['disp'][1]
@@ -298,6 +321,17 @@ def main():
                 err_cs.append(diff)
             else:
                 err_cs.append(None)
+
+        # Otis
+        if has_ot:
+            ot_nodes = inc_ot[k]['nodes']
+            if tip_id in ot_nodes:
+                u2_ot = ot_nodes[tip_id]['disp'][1]
+                diff = abs(u2_ot - u2_ex)
+                if diff < min_err_floor: diff = min_err_floor
+                err_ot.append(diff)
+            else:
+                err_ot.append(None)
     
     # Initial Data (k=0)
     x0_u, y0_u, z0_u = interpolate_beam(inc_uel[0])
@@ -312,6 +346,11 @@ def main():
         fig.add_trace(go.Scatter3d(x=x0_h, y=y0_h, z=z0_h, mode='lines+markers', line=dict(color='green', width=4, dash='dot'), marker=dict(size=3, symbol='diamond'), name='Complex'), row=1, col=1)
         trace_indices.append(len(trace_indices)) # Auto append
 
+    if has_ot:
+        x0_o, y0_o, z0_o = interpolate_beam(inc_ot[0])
+        fig.add_trace(go.Scatter3d(x=x0_o, y=y0_o, z=z0_o, mode='lines+markers', line=dict(color='purple', width=4, dash='dashdot'), marker=dict(size=3, symbol='square'), name='Otis'), row=1, col=1)
+        trace_indices.append(len(trace_indices)) # Auto append
+
     if has_ex:
         x0_e, y0_e, z0_e = interpolate_beam(inc_ex[0])
         fig.add_trace(go.Scatter3d(x=x0_e, y=y0_e, z=z0_e, mode='lines+markers', line=dict(color='orange', width=4), marker=dict(size=3, symbol='cross'), name='Exact'), row=1, col=1)
@@ -323,6 +362,8 @@ def main():
     fig.add_trace(go.Scatter(x=inc_indices, y=err_fd, mode='lines+markers', name='FD Error', line=dict(color='red')), row=2, col=1)
     if has_hc:
         fig.add_trace(go.Scatter(x=inc_indices, y=err_cs, mode='lines+markers', name='CS Error', line=dict(color='green')), row=2, col=1)
+    if has_ot:
+        fig.add_trace(go.Scatter(x=inc_indices, y=err_ot, mode='lines+markers', name='Otis Error', line=dict(color='purple')), row=2, col=1)
         
     fig.update_yaxes(type="log", title="Tip Error (Log Scale)", row=2, col=1)
     fig.update_xaxes(title="Increment", row=2, col=1)
@@ -341,6 +382,10 @@ def main():
         if has_hc:
             x_h, y_h, z_h = interpolate_beam(inc_hc[k])
             frame_data.append(go.Scatter3d(x=x_h, y=y_h, z=z_h))
+
+        if has_ot:
+            x_o, y_o, z_o = interpolate_beam(inc_ot[k])
+            frame_data.append(go.Scatter3d(x=x_o, y=y_o, z=z_o))
 
         if has_ex:
             x_e, y_e, z_e = interpolate_beam(inc_ex[k])
@@ -395,9 +440,10 @@ def main():
     )
     
     print("Writing output...")
-    fig.write_html("../sim/beam_comparison.html")
-    print("Done.")
+    output_path = os.path.join(sim_dir, "beam_comparison.html")
+    fig.write_html(output_path)
+    print(f"Done. Saved to {output_path}")
 
 if __name__ == "__main__":
     main()
-de
+

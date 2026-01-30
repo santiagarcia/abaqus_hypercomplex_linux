@@ -1,0 +1,53 @@
+<Description>
+      ABAQUS/standard rank 00 pid 1120621 received signal 6 (Aborted)
+
+</Description>
+
+<Context>
+   ELEMENT LOOP
+</Context>
+
+<Callstack>
+   1) libc.so.6                  0x0004300b ! gsignal          ??:?
+   2) libc.so.6                  0x00022859 ! abort            ??:?
+   3) libc.so.6                  0x0008d266 ! __fsetlocking    ??:?
+   4) libc.so.6                  0x0012fcda ! __fortify_fail   ??:?
+   5) libc.so.6                  0x0012e576 ! __chk_fail       ??:?
+   6) libc.so.6                  0x0008504f ! _IO_ungetc       ??:?
+   7) libc.so.6                  0x00092024 ! _IO_default_xsputn ??:?
+   8) libc.so.6                  0x000777ad ! psiginfo         ??:?
+   9) libc.so.6                  0x000850f9 ! _IO_ungetc       ??:?
+  10) libc.so.6                  0x0012e06b ! __sprintf_chk    ??:?
+  11) libifcoremt.so.5           0x000f2993 ! fname_from_piped_fd ??:?
+  12) libifcoremt.so.5           0x000f21eb ! for__compute_filename ??:?
+  13) libifcoremt.so.5           0x000f39e9 ! for__open_proc   ??:?
+  14) libifcoremt.so.5           0x000663b0 ! for__open_default ??:?
+  15) libifcoremt.so.5           0x0005ba23 ! for_inquire      ??:?
+  16) libABQSMAAspSupport.so     0x001b99e2 ! bcu_cleanup      ??:?
+  17) libABQSMAAspSupport.so     0x00104f25 ! SMAAspBcu_finalize ??:?
+  18) libABQSMAAspSupport.so     0x0030baf4 ! SMAAspSupport_finalize ??:?
+</Callstack>
+
+<Memory>
+   <Current>            1481 MB </Current>
+   <Resident>            232 MB </Resident>
+   <Physical>         129024 MB </Physical>
+   <Limit>            103219 MB </Limit>
+   <Accessible>       129024 MB </Accessible>
+   <Allocator>            DL    </Allocator>
+   <HugePages>       madvise    </HugePages>
+</Memory>
+
+<Directories>
+  <current> /tmp/ammslab3_cantilever_ne1_f100_inc10_uel_1119625 </current> 
+    <indir> /home/ammslab3/abaqus_hypercomplex/sim/runs/ne1_f100_inc10 </indir> 
+   <outdir> /home/ammslab3/abaqus_hypercomplex/sim/runs/ne1_f100_inc10 </outdir>
+   <tmpdir> /tmp/ammslab3_cantilever_ne1_f100_inc10_uel_1119625 </tmpdir>
+</Directories>
+
+<Installation>
+     <Version> 2021.HF5 6.21-6 </Version>
+       <Build>   2021_02_02-13.03.25 167982 </Build>
+  <Executable> /usr/SIMULIA/EstProducts/2021/linux_a64/code/bin/standard </Executable>
+</Installation>
+

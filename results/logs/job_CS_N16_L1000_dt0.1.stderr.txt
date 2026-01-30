@@ -1,0 +1,10 @@
+Abaqus License Manager checked out the following licenses:
+Abaqus/Standard checked out 5 tokens from Flexnet server EB137960.utsarr.net.
+<309 out of 314 licenses remain available>.
+Intel(R) Fortran Intel(R) 64 Compiler Classic for applications running on Intel(R) 64, Version 2021.10.0 Build 20230609_000000
+Copyright (C) 1985-2023 Intel Corporation.  All rights reserved.
+
+ifort: command line warning #10434: option '-extend_source' use with underscore is deprecated; use '-extend-source' instead
+Intel(R) Fortran Intel(R) 64 Compiler Classic for applications running on Intel(R) 64, Version 2021.10.0 Build 20230609_000000
+Copyright (C) 1985-2023 Intel Corporation.  All rights reserved.
+
