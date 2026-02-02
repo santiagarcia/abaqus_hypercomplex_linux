@@ -5,9 +5,10 @@ import time
 
 def main():
     # Define Sweep Parameters
-    nelems_list = [1, 2, 4, 8, 20]
-    force_list = [-100.0]
-    nincs_list = [10]
+    # Expanded sweep for >1000 analyses (13 * 10 * 8 = 1040 cases)
+    nelems_list = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 80]
+    force_list = [-10000.0, -20000.0, -30000.0, -40000.0, -50000.0, -60000.0, -70000.0, -80000.0, -90000.0, -100000.0]
+    nincs_list = [10, 20, 30, 40, 50, 60, 80, 100]
     
     # Or simplified for testing:
     # nelems_list = [1, 5]
