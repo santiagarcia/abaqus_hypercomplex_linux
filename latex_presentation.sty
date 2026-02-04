@@ -1,0 +1,1189 @@
+\UseRawInputEncoding
+\documentclass[aspectratio=169,xcolor=dvipsnames]{beamer}
+\usetheme{SimpleDarkBlue}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{ragged2e}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,shapes.geometric}
+\justifying
+
+% -----------------------------------------------------------------------------
+% Metadata
+% -----------------------------------------------------------------------------
+\title{Abaqus UEL Tangent Verification:\\Exact vs FD vs Hypercomplex vs Hyperdual vs OTI}
+\author{Santiago Garc\'ia Botero}
+\institute{Universidad EAFIT \\ Dept. Applied Sciences and Engineering}
+\date{\today}
+
+% -----------------------------------------------------------------------------
+% Notation macros
+% -----------------------------------------------------------------------------
+\newcommand{\bvec}[1]{\mathbf{#1}}
+\newcommand{\dvec}{\bvec{d}}
+\newcommand{\Rvec}{\bvec{R}}
+\newcommand{\fint}{\bvec{f}_{int}}
+\newcommand{\fext}{\bvec{f}_{ext}}
+\newcommand{\KT}{\bvec{K}_T}
+\newcommand{\Kexact}{\KT_{\text{exact}}}
+\newcommand{\Kfd}{\KT_{\text{fd}}}
+\newcommand{\Khc}{\KT_{\text{hc}}}
+\newcommand{\Khd}{\KT_{\text{hd}}}
+\newcommand{\Koti}{\KT_{\text{oti}}}
+\newcommand{\I}{\bvec{I}}
+\newcommand{\Fmat}{\bvec{F}}
+\newcommand{\EGL}{\bvec{E}}
+\newcommand{\Smat}{\bvec{S}}
+\newcommand{\Cmat}{\bvec{\mathcal{C}}}
+\newcommand{\Kmat}{\bvec{K}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\relerr}[2]{\frac{\norm{#1-#2}}{\norm{#2}}}
+\newcommand{\Frob}[1]{\left\lVert #1 \right\rVert_F}
+
+% -----------------------------------------------------------------------------
+% Helpers: placeholders + safe includegraphics + safe listings
+% -----------------------------------------------------------------------------
+\newcommand{\PlaceholderBox}[2]{
+\begin{figure}
+\centering
+\fbox{\parbox{0.90\textwidth}{
+\centering
+\textbf{#1}\\[0.5em]
+\small #2
+}}
+\end{figure}
+}
+
+\newcommand{\MaybeFig}[3]{
+\begin{figure}
+\centering
+\IfFileExists{#1}{
+  \includegraphics[width=#2\textwidth]{#1}
+}{
+  \fbox{\parbox{0.90\textwidth}{
+  \centering
+  \textbf{MISSING FILE:} \texttt{#1}\\
+  \small Export your plot/image to this path or edit the filename.
+  }}
+}
+\caption{#3}
+\end{figure}
+}
+
+% -----------------------------------------------------------------------------
+% Document
+% -----------------------------------------------------------------------------
+\begin{document}
+
+% =============================================================================
+% TITLE + WHY
+% =============================================================================
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Why this repo exists (and why Newton cares)}
+\justifying
+In geometrically nonlinear FEM we do \textbf{not} solve $\bvec{K}\dvec=\bvec{f}$.
+We solve:
+\[
+\Rvec(\dvec)=\fint(\dvec)-\fext=\bvec{0}.
+\]
+Abaqus iterates (Newton):
+\[
+\KT(\dvec^i)\Delta\dvec=-\Rvec(\dvec^i),
+\qquad
+\dvec^{i+1}=\dvec^i+\Delta\dvec.
+\]
+
+The entire point of this project is: \textbf{compute $\KT$ correctly and efficiently} and quantify:
+\[
+\text{accuracy} \;\;\leftrightarrow\;\; \text{runtime} \;\;\leftrightarrow\;\; \text{Newton behavior}.
+\]
+\end{frame}
+
+\begin{frame}{Roadmap (Math $\leftrightarrow$ Code)}
+\justifying
+We will connect:
+\begin{itemize}
+  \item \textbf{Math layer:} residual $\Rvec$, tangent $\KT=\partial\Rvec/\partial\dvec$, error models.
+  \item \textbf{UEL layer:} what RHS and AMATRX must contain, sign conventions, transforms.
+  \item \textbf{Method layer:} Exact, FD, Hypercomplex, Hyperdual (2-channel AD), OTI.
+  \item \textbf{Verification:} plots of runtime + error vs mesh/load/increments.
+\end{itemize}
+
+We will \textbf{stop after each method} and summarize: math, implementation pattern, failure modes.
+\end{frame}
+
+\begin{frame}{15-minute plan (what you will say)}
+\justifying
+\begin{enumerate}
+  \item \textbf{Context (2 min):} Why Newton needs a good tangent.
+  \item \textbf{Math baseline (4 min):} Residual, tangent, and beam kinematics.
+  \item \textbf{Methods (6 min):} Exact, FD, Complex-step, Hyperdual (pros/cons + error terms).
+  \item \textbf{Benchmarks (2 min):} Error vs step, runtime vs calls, Newton iterations.
+  \item \textbf{Takeaways (1 min):} Which method to use and why.
+\end{enumerate}
+\end{frame}
+
+% =============================================================================
+% REPO / USAGE
+% =============================================================================
+\begin{frame}{Repository at a glance}
+\justifying
+\begin{columns}
+\column{0.55\textwidth}
+\footnotesize
+	exttt{.}\\
+	exttt{|-- README.md}\\
+	exttt{|-- scripts/}\\
+	exttt{|\ \ |-- run\_comparison.sh}\\
+	exttt{|\ \ |-- generate\_inp.py}\\
+	exttt{|\ \ |-- compare\_results.py}\\
+	exttt{|\ \ `-- visualize\_results.py}\\
+	exttt{|-- sim/}\\
+	exttt{|\ \ `-- (Abaqus working directory)}\\
+	exttt{`-- src/}\\
+	exttt{\ \ |-- beam\_uel\_exact.f90}\\
+	exttt{\ \ |-- beam\_uel\_fd.f90}\\
+	exttt{\ \ |-- beam\_uel\_complex.f90}\\
+	exttt{\ \ `-- beam\_uel.f90\ \ (hyperdual)}
+\column{0.45\textwidth}
+	extbf{What matters for the talk:}
+\begin{itemize}
+  \item The physics is identical in every file.
+  \item Only the tangent computation changes.
+  \item Scripts handle compilation, runs, and plots.
+\end{itemize}
+\end{columns}
+\end{frame}
+
+\begin{frame}{How to run (user contract)}
+\justifying
+\texttt{./scripts/run\_comparison.sh 10 -10000.0}\\
+\texttt{./scripts/run\_comparison.sh 100 -100000.0 100}
+
+Outputs:
+\begin{itemize}
+  \item HTML report: \texttt{sim/beam_comparison.html}
+  \item Plots of error vs step size and runtime vs mesh
+  \item Abaqus \texttt{.dat} and \texttt{.odb} results inside \texttt{sim/}
+\end{itemize}
+\end{frame}
+
+\begin{frame}{What Abaqus expects from a UEL}
+\justifying
+UEL must provide:
+\begin{itemize}
+  \item \textbf{RHS} $\rightarrow$ element residual vector (unbalanced nodal forces).
+  \item \textbf{AMATRX} $\rightarrow$ element tangent matrix (Jacobian).
+\end{itemize}
+
+Math view:
+\[
+\texttt{RHS} \sim -\Rvec^{(e)}(\dvec),
+\qquad
+\texttt{AMATRX} \sim \KT^{(e)}(\dvec).
+\]
+
+If RHS and AMATRX are \textbf{not consistent}, Newton becomes ``quasi-Newton by accident''.
+\end{frame}
+
+\begin{frame}{UEL interface (the minimal contract)}
+\justifying
+In Abaqus/Standard, your subroutine signature includes:
+\begin{itemize}
+  \item \texttt{RHS} : element residual vector
+  \item \texttt{AMATRX} : element tangent matrix
+  \item \texttt{PROPS} : material/section properties
+  \item \texttt{COORDS}, \texttt{U}, \texttt{DU} : nodal geometry and displacements
+\end{itemize}
+
+Key rule: \textbf{RHS and AMATRX must come from the same residual model}.
+If not, Newton convergence degrades immediately.
+\end{frame}
+
+\begin{frame}{Data flow in one element call}
+\justifying
+\begin{enumerate}
+  \item Read nodal coordinates and DOFs.
+  \item Build local frame and transform $T$.
+  \item Compute strains/curvatures at Gauss points.
+  \item Compute stress resultants and internal forces.
+  \item Assemble residual $\Rvec$.
+  \item Compute or approximate $\KT$.
+  \item Transform $\Rvec$ and $\KT$ back to global.
+\end{enumerate}
+\end{frame}
+
+\begin{frame}{Element DOFs (2-node beam: 12 DOFs)}
+\justifying
+We assume the canonical 2-node beam ordering:
+\[
+\dvec =
+[u_1,\ v_1,\ w_1,\ \theta_{x1},\ \theta_{y1},\ \theta_{z1},\
+ u_2,\ v_2,\ w_2,\ \theta_{x2},\ \theta_{y2},\ \theta_{z2}]^T.
+\]
+
+\PlaceholderBox{INSERT DOF DIAGRAM}{
+Beam axis + local triad; label translations and rotations at both nodes.}
+\end{frame}
+
+\begin{frame}{Beam kinematics (Euler--Bernoulli)}
+\justifying
+Assume plane sections remain plane and orthogonal to the neutral axis.
+The axial displacement and transverse deflections are interpolated by:
+\[
+u(x) = N_u(x) \begin{bmatrix} u_1 \\ u_2 \end{bmatrix},
+\quad
+v(x) = N_v(x) \begin{bmatrix} v_1 \\ \theta_{z1} \\ v_2 \\ \theta_{z2} \end{bmatrix},
+\quad
+w(x) = N_v(x) \begin{bmatrix} w_1 \\ -\theta_{y1} \\ w_2 \\ -\theta_{y2} \end{bmatrix}.
+\]
+
+Strain and curvature measures:
+\[
+\epsilon_{x} = \frac{\partial u}{\partial x} + \frac{1}{2}\left(\frac{\partial v}{\partial x}\right)^2 + \frac{1}{2}\left(\frac{\partial w}{\partial x}\right)^2,
+\quad
+\kappa_y = -\frac{\partial^2 w}{\partial x^2},
+\quad
+\kappa_z = \frac{\partial^2 v}{\partial x^2}.
+\]
+\end{frame}
+
+\begin{frame}{Shape functions used in the UEL}
+\justifying
+Axial field uses linear shape functions:
+\[
+N_u = \left[\frac{1-\xi}{2},\ \frac{1+\xi}{2}\right].
+\]
+Transverse fields use Hermite cubic functions:
+\[
+N_v = \left[\frac{1}{4}(2-3\xi+\xi^3),\ \frac{L}{8}(1-\xi-\xi^2+\xi^3),\ \frac{1}{4}(2+3\xi-\xi^3),\ \frac{L}{8}(-1-\xi+\xi^2+\xi^3)\right].
+\]
+These are implemented in \texttt{src/beam\_uel\_fd.f90} and reused by the other methods.
+\end{frame}
+
+\begin{frame}{Numerical integration (Gauss points)}
+\justifying
+Internal forces and stiffness are evaluated via Gauss quadrature:
+\[
+\fint = \sum_{g=1}^{n_g} B(\xi_g)^T\,\text{resultants}(\xi_g)\,w_g\,\frac{L}{2}.
+\]
+Typical choice: two Gauss points for bending/axial fields.
+\begin{itemize}
+  \item The same integration loop is shared by all methods.
+  \item Only the derivative engine changes (exact vs FD vs complex vs hyperdual).
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Local $\leftrightarrow$ Global transforms (why you see $T$ everywhere)}
+\justifying
+Beam physics is easier in local coordinates. Let $T$ be the orthonormal transform:
+\[
+\dvec_{glob}=T\,\dvec_{loc},
+\qquad
+\dvec_{loc}=T^T\,\dvec_{glob}.
+\]
+
+Residual:
+\[
+\Rvec_{glob}=T\,\Rvec_{loc}.
+\]
+
+Tangent:
+\[
+\KT_{glob}=T\,\KT_{loc}\,T^T.
+\]
+
+\PlaceholderBox{INSERT TRANSFORM DIAGRAM}{
+Show how $T$ is built from nodal coordinates, plus block structure for (u,v,w) and rotations.}
+\end{frame}
+
+\begin{frame}{Constructing $T$ (step-by-step)}
+\justifying
+Given nodal coordinates $\mathbf{x}_1, \mathbf{x}_2$:
+\begin{enumerate}
+  \item Build beam axis: $\mathbf{e}_x = \frac{\mathbf{x}_2-\mathbf{x}_1}{\|\mathbf{x}_2-\mathbf{x}_1\|}$.
+  \item Choose reference vector $\mathbf{e}_z$ (global up) and orthogonalize:
+  $\mathbf{e}_y = \frac{\mathbf{e}_z \times \mathbf{e}_x}{\|\mathbf{e}_z \times \mathbf{e}_x\|}$.
+  \item Set $\mathbf{e}_z = \mathbf{e}_x \times \mathbf{e}_y$.
+  \item Assemble rotation matrix $R=[\mathbf{e}_x\ \mathbf{e}_y\ \mathbf{e}_z]$.
+  \item Build $T$ as a block diagonal with $R$ repeated for translations and rotations.
+\end{enumerate}
+This ensures $T$ is orthonormal and $T^{-1}=T^T$.
+\end{frame}
+
+% =============================================================================
+% GOVERNING EQUATIONS (MATH BASELINE)
+% =============================================================================
+\begin{frame}{Governing equation: discrete equilibrium}
+\justifying
+After discretization and assembly:
+\[
+\Rvec(\dvec)=\fint(\dvec)-\fext=\bvec{0}.
+\]
+
+At element level:
+\[
+\Rvec^{(e)}(\dvec^{(e)})=
+\fint^{(e)}(\dvec^{(e)})-\fext^{(e)}.
+\]
+
+The tangent is the Jacobian:
+\[
+\KT^{(e)}(\dvec^{(e)})=
+\frac{\partial \Rvec^{(e)}(\dvec^{(e)})}{\partial \dvec^{(e)}}.
+\]
+\end{frame}
+
+\begin{frame}{Newton linearization: what “consistent tangent” means}
+\justifying
+Consistency = first-order correctness of the residual model:
+\[
+\Rvec(\dvec+\Delta\dvec)
+=
+\Rvec(\dvec)+\KT(\dvec)\Delta\dvec+\mathcal{O}(\norm{\Delta\dvec}^2).
+\]
+
+Then Newton solves:
+\[
+\KT(\dvec^i)\Delta\dvec=-\Rvec(\dvec^i)
+\Rightarrow \text{quadratic convergence near solution (smooth case).}
+\]
+
+Bad $\KT$ = more iterations, smaller stable increments, sometimes divergence.
+\end{frame}
+
+\begin{frame}{Verification mindset: we compare tangents, not vibes}
+\justifying
+Two things matter:
+\[
+\text{(A) Does it converge?}\quad \text{(B) How fast and how accurate?}
+\]
+
+We measure:
+\[
+\epsilon_u^{(m)}=\frac{\norm{\dvec^{(m)}-\dvec^{(exact)}}}{\norm{\dvec^{(exact)}}},
+\qquad
+t^{(m)}=\text{runtime},
+\qquad
+N_{it}^{(m)}=\text{Newton iterations}.
+\]
+
+Optional (if you dump tangents):
+\[
+\epsilon_K^{(m)}=\frac{\Frob{\KT^{(m)}-\KT^{(exact)}}}{\Frob{\KT^{(exact)}}}.
+\]
+\end{frame}
+
+% =============================================================================
+% METHODS OVERVIEW
+% =============================================================================
+\begin{frame}{Five methods: what changes vs what stays fixed}
+\justifying
+Fixed across methods:
+\[
+\Rvec(\dvec)=\fint(\dvec)-\fext
+\quad\text{(same element physics)}.
+\]
+
+Only difference:
+\[
+\KT(\dvec)=\frac{\partial\Rvec}{\partial\dvec}.
+\]
+
+\begin{table}
+\centering
+\small
+\begin{tabular}{l l l}
+\toprule
+Method & Jacobian idea & Residual calls (per element) \\
+\midrule
+Exact & analytic $\KT$ & $\approx 1\times$ \\
+FD & real perturbations & $\approx (n+1)\times$ \\
+Hypercomplex & imaginary units & $\approx n\times$ (or $\approx n/k$ multicomplex) \\
+Hyperdual (2-ch) & nilpotent dual channels & $\approx \lceil n/2\rceil\times$ \\
+OTI & truncated Taylor algebra & $\approx \lceil n/p\rceil\times$ (depends on packing) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Here $n=12$ for the beam element.
+\end{frame}
+
+% =============================================================================
+% METHOD 0: EXACT
+% =============================================================================
+\begin{frame}{Method 1 --- Exact analytic tangent (baseline)}
+\justifying
+Goal:
+\[
+\Kexact(\dvec)=\frac{\partial \Rvec(\dvec)}{\partial \dvec}
+=\frac{\partial \fint(\dvec)}{\partial \dvec}
+\quad (\fext \text{ independent of } \dvec).
+\]
+
+This is the reference:
+\begin{itemize}
+\item fastest per element (no repeated residual evaluations),
+\item strongest Newton behavior (when implemented correctly),
+\item used to define accuracy of all other methods.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Exact tangent: structure inside a nonlinear beam}
+\justifying
+Internal force typically decomposes (conceptually):
+\[
+\fint = \fint^{axial} + \fint^{bend} + \fint^{torsion}.
+\]
+
+Corresponding tangent:
+\[
+\Kexact
+=
+\frac{\partial \fint^{axial}}{\partial \dvec}
++
+\frac{\partial \fint^{bend}}{\partial \dvec}
++
+\frac{\partial \fint^{torsion}}{\partial \dvec}.
+\]
+
+Each term is computed by:
+\[
+\fint=\int B(\dvec)^T\,\text{(stress resultants)}\;\dd x,
+\quad
+\Kexact=\int \left(\frac{\partial B^T}{\partial \dvec}\cdot\text{(resultants)} + B^T\frac{\partial(\text{resultants})}{\partial \dvec}\right)\dd x.
+\]
+\end{frame}
+
+\begin{frame}{Exact tangent: the two sources of nonlinearity}
+\justifying
+Even with “simple” constitutive laws, geometric nonlinearity enters via:
+\[
+\text{(1) kinematics in strains/curvatures} \;\Rightarrow\; \text{resultants depend on }\dvec,
+\]
+\[
+\text{(2) follower geometry / rotations} \;\Rightarrow\; B(\dvec) \text{ depends on }\dvec.
+\]
+
+So analytic tangent requires:
+\begin{itemize}
+\item explicit derivatives of strain measures and curvature measures,
+\item explicit derivatives of rotation/triad updates (if used),
+\item careful local-global consistency.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Exact tangent: programming pattern}
+\justifying
+Analytic implementation typically does:
+\begin{itemize}
+\item compute state: strain measures $\rightarrow$ stress resultants,
+\item compute residual vector $\Rvec$,
+\item compute tangent $\Kexact$ in the same quadrature loop,
+\item transform to global: $\Rvec_{glob}=T\Rvec_{loc}$, $\K_{glob}=T\K_{loc}T^T$.
+\end{itemize}
+
+\PlaceholderBox{INSERT “CALL GRAPH” DIAGRAM}{
+Show subroutine call chain: UEL $\to$ element routine $\to$ shape funcs $\to$ residual+tangent.}
+\end{frame}
+
+\begin{frame}{Exact tangent: code anchor (file)}
+\justifying
+This deck expects your analytic UEL file here:
+\[
+\texttt{src/beam\_uel\_exact.f90}
+\]
+
+\PlaceholderBox{INSERT CODE SNAPSHOT}{Show module header + main element routine signature + where AMATRX is filled.}
+\end{frame}
+
+\begin{frame}{STOP 1 --- Exact method summary}
+\justifying
+\textbf{Math:}
+\[
+\Kexact=\frac{\partial \Rvec}{\partial \dvec}
+\quad\text{computed analytically.}
+\]
+
+\textbf{Pros:}
+fast, stable Newton, best convergence.
+
+\textbf{Cons:}
+hard to derive, easy to implement inconsistently (especially transforms + sign conventions).
+
+\PlaceholderBox{INSERT MINI TABLE}{
+Put one representative run: runtime, Newton iters, solution error (should be 0 by definition vs itself).}
+\end{frame}
+
+% =============================================================================
+% METHOD 2: FD
+% =============================================================================
+\begin{frame}{Method 2 --- Finite Differences (FD): definition}
+\justifying
+Approximate column $j$ of the Jacobian by perturbing DOF $d_j$.
+
+Forward FD:
+\[
+\Kfd(:,j)\approx\frac{\Rvec(\dvec+h\bvec{e}_j)-\Rvec(\dvec)}{h}.
+\]
+
+Central FD (more accurate, more expensive):
+\[
+\Kfd(:,j)\approx\frac{\Rvec(\dvec+h\bvec{e}_j)-\Rvec(\dvec-h\bvec{e}_j)}{2h}.
+\]
+\end{frame}
+
+\begin{frame}{FD: Taylor expansion and truncation error}
+\justifying
+Expand:
+\[
+\Rvec(\dvec+h\bvec{e}_j)=
+\Rvec(\dvec)+h\frac{\partial\Rvec}{\partial d_j}+\frac{h^2}{2}\frac{\partial^2\Rvec}{\partial d_j^2}+\mathcal{O}(h^3).
+\]
+
+Forward FD gives:
+\[
+\Kfd(:,j)=\frac{\partial\Rvec}{\partial d_j}+\mathcal{O}(h).
+\]
+
+Central FD cancels odd/even terms better:
+\[
+\Kfd(:,j)=\frac{\partial\Rvec}{\partial d_j}+\mathcal{O}(h^2).
+\]
+\end{frame}
+
+\begin{frame}{FD: roundoff, cancellation, and the step-size trap}
+\justifying
+FD uses subtraction of close numbers:
+\[
+\Rvec(\dvec+h\bvec{e}_j)-\Rvec(\dvec).
+\]
+
+Total error model:
+\[
+\text{error}(h)\approx C_1 h + \frac{C_2\epsilon_{mach}}{h}.
+\]
+
+So there is an optimal scale:
+\[
+h_{opt}\sim\sqrt{\epsilon_{mach}}\times(\text{scale of } d_j).
+\]
+
+\PlaceholderBox{INSERT “U-SHAPE” PLOT}{
+Plot error vs $h$ showing truncation dominating for large $h$ and roundoff dominating for tiny $h$.}
+\end{frame}
+
+\begin{frame}{FD: mechanics-specific scaling issue}
+\justifying
+Your DOFs are heterogeneous:
+\[
+u,v,w \text{ in length units},\qquad \theta \text{ in radians}.
+\]
+
+If you use a single $h$ for everything, you silently change the effective perturbation energy.
+
+Better practice:
+\[
+h_j = \eta\max(1,|d_j|)\,s_j,
+\]
+where $s_j$ is a DOF scale (e.g.\ meters vs radians), and $\eta$ is a small nondimensional number.
+
+\PlaceholderBox{INSERT A DOF SCALE TABLE}{
+Table with recommended $s_j$ for translations and rotations.}
+\end{frame}
+
+\begin{frame}{FD: simple implementation pattern}
+\justifying
+Pseudo-code for the FD tangent (forward difference):
+\vspace{0.3em}
+\texttt{call residual(u, R0)}\\
+\texttt{do j=1,ndof}\\
+\texttt{\ \ u\_pert = u}\\
+\texttt{\ \ u\_pert(j) = u(j) + h\_j}\\
+\texttt{\ \ call residual(u\_pert, Rj)}\\
+\texttt{\ \ K(:,j) = (Rj - R0) / h\_j}\\
+\texttt{end do}
+Two important details:
+\begin{itemize}
+  \item Use consistent $h_j$ scaling for translations vs rotations.
+  \item Recompute transformations and kinematics for each perturbation.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{FD: choosing $h$ (numerical example)}
+\justifying
+Suppose $\epsilon_{mach}\approx 2.2\times 10^{-16}$. Then:
+\[
+h_{opt} \approx \sqrt{\epsilon_{mach}} \approx 1.5\times 10^{-8}.
+\]
+If a displacement DOF is in meters and a rotation is in radians:
+\begin{itemize}
+  \item $h_u = 10^{-8}\,\text{m}$ is reasonable.
+  \item $h_\theta = 10^{-8}\,\text{rad}$ may be too small if angles are \textit{already} $\sim 10^{-3}$.
+\end{itemize}
+This is why FD needs \textbf{manual tuning} for each model.
+\end{frame}
+
+\begin{frame}{FD: code anchor (file)}
+\justifying
+This deck expects an FD UEL here:
+\[
+\texttt{src/beam\_uel\_fd.f90}
+\]
+
+\PlaceholderBox{INSERT CODE SNAPSHOT}{Show where base residual is computed, then the perturbation loop over DOFs, and how AMATRX columns are filled.}
+\end{frame}
+
+\begin{frame}{STOP 2 --- FD method summary}
+\justifying
+\textbf{Math:}
+\[
+\Kfd(:,j)\approx\frac{\Rvec(\dvec+h\bvec{e}_j)-\Rvec(\dvec)}{h}.
+\]
+
+\textbf{Pros:}
+simple, works on any residual (black-box).
+
+\textbf{Cons:}
+sensitive to $h$, slow ($\sim n$ residual calls), noisy tangents can degrade Newton.
+
+\PlaceholderBox{INSERT MINI TABLE}{
+Representative run vs Exact: runtime ratio, Newton iters, solution error.}
+\end{frame}
+
+% =============================================================================
+% METHOD 3: HYPERCOMPLEX
+% =============================================================================
+\begin{frame}{Method 3 --- Hypercomplex differentiation: what we mean}
+\justifying
+In practice “hypercomplex” here means:
+\begin{itemize}
+\item \textbf{Complex-step} (single imaginary unit) for first derivatives, and/or
+\item \textbf{Multicomplex / bicomplex} (multiple imaginary units) to pack multiple derivative directions per evaluation.
+\end{itemize}
+
+Single complex-step gives one Jacobian column per residual evaluation.
+Multicomplex generalizes that idea (like your 2-channel hyperdual, but with imaginary units).
+\end{frame}
+
+\begin{frame}{Hypercomplex (complex-step): core identity}
+\justifying
+For analytic $f$:
+\[
+\frac{\partial f}{\partial x}\Big|_{x}
+\approx
+\frac{\Im\left(f(x+i h)\right)}{h}.
+\]
+
+Applied to residual:
+\[
+\Khc(:,j)\approx \frac{\Im\left(\Rvec(\dvec+i h\bvec{e}_j)\right)}{h}.
+\]
+
+No subtraction of close real numbers, so roundoff is dramatically reduced vs FD.
+\end{frame}
+
+\begin{frame}{Complex-step: Taylor expansion (why it works)}
+\justifying
+\[
+\Rvec(\dvec+i h\bvec{e}_j)
+=
+\Rvec(\dvec)
++i h\frac{\partial\Rvec}{\partial d_j}
+-\frac{h^2}{2}\frac{\partial^2\Rvec}{\partial d_j^2}
+-i\frac{h^3}{6}\frac{\partial^3\Rvec}{\partial d_j^3}
++\mathcal{O}(h^4).
+\]
+
+So:
+\[
+\frac{\Im(\Rvec(\dvec+i h\bvec{e}_j))}{h}
+=
+\frac{\partial\Rvec}{\partial d_j}
++\mathcal{O}(h^2).
+\]
+
+Key point: no catastrophic cancellation like FD.
+\end{frame}
+
+\begin{frame}{Complex-step: the “analytic code path” requirement}
+\justifying
+Complex-step assumes the computational graph is analytic in the neighborhood of the perturbation.
+
+Risky operations:
+\begin{itemize}
+\item branching on sign / comparisons that become ambiguous for complex values,
+\item \texttt{abs}, \texttt{sqrt} with branch cuts,
+\item normalizations with hidden real assumptions.
+\end{itemize}
+
+If your residual uses such logic, the derivative can be distorted or undefined.
+\end{frame}
+
+\begin{frame}{Complex-step: practical fixes}
+\justifying
+To keep the residual complex-safe:
+\begin{itemize}
+  \item Replace \texttt{abs(x)} with \texttt{sqrt(x*x)} if $x$ is complex.
+  \item Avoid \texttt{if (x \textless 0)} branches; use smooth regularization.
+  \item Normalize vectors using $\sqrt{x^\ast x}$ instead of $\|x\|$ shortcuts.
+\end{itemize}
+In short: eliminate real-only operations that break analyticity.
+\end{frame}
+
+\begin{frame}{Complex-step: implementation pattern in this repo}
+\justifying
+Implementation steps used here:
+\begin{enumerate}
+  \item Define complex displacement vector $\hat{\dvec}$.
+  \item For each DOF, add $i h$ to that component.
+  \item Call the same residual routine (but complex-typed).
+  \item Extract tangent column with \texttt{AIMAG(R) / h}.
+\end{enumerate}
+This yields a clean, near-analytic Jacobian with no subtraction error.
+\end{frame}
+
+\begin{frame}{Hypercomplex generalization: multicomplex packing idea}
+\justifying
+If you have two independent imaginary units $i_1, i_2$ with:
+\[
+i_1^2=i_2^2=-1,\qquad i_1 i_2 = i_2 i_1,
+\]
+you can seed two directions at once:
+\[
+\hat{d}_j = d_j + i_1 h,\qquad
+\hat{d}_{j+1}=d_{j+1}+ i_2 h.
+\]
+
+Then derivative extraction uses the corresponding imaginary channels:
+\[
+\KT(:,j)=\frac{\Im_{i_1}(\hat{\Rvec})}{h},\qquad
+\KT(:,j+1)=\frac{\Im_{i_2}(\hat{\Rvec})}{h}.
+\]
+
+This mirrors your \textbf{2-channel hyperdual} idea, but in hypercomplex arithmetic.
+\end{frame}
+
+\begin{frame}{Hypercomplex: code anchor (file)}
+\justifying
+If your repo’s hypercomplex method is implemented as complex-step, this is the file:
+\[
+\texttt{src/beam\_uel\_complex.f90}
+\]
+(If you also have a multicomplex file, add it and point the deck to it.)
+
+\PlaceholderBox{INSERT CODE SNAPSHOT}{Show complex residual routine + loop adding imaginary perturbation and extracting AMATRX columns using AIMAG/h.}
+\end{frame}
+
+\begin{frame}{STOP 3 --- Hypercomplex method summary}
+\justifying
+\textbf{Math (complex-step):}
+\[
+\Khc(:,j)\approx\frac{\Im(\Rvec(\dvec+i h\bvec{e}_j))}{h},
+\quad \mathcal{O}(h^2)\text{ truncation}.
+\]
+
+\textbf{Pros:}
+very accurate, tiny $h$ allowed, less noisy than FD.
+
+\textbf{Cons:}
+requires complex-safe residual path, cost $\sim n$ residual calls unless multicomplex packing is used.
+
+\PlaceholderBox{INSERT MINI TABLE}{
+Representative run vs Exact: runtime ratio, Newton iters, solution error.}
+\end{frame}
+
+% =============================================================================
+% METHOD 4: HYPERDUAL (2-channel AD)
+% =============================================================================
+\begin{frame}{Method 4 --- Hyperdual (2-channel forward AD): definition}
+\justifying
+Hyperdual-style 2-channel type:
+\[
+\hat{x}=x+\epsilon_1 x_{,1}+\epsilon_2 x_{,2},
+\quad
+\epsilon_1^2=\epsilon_2^2=0,\quad \epsilon_1\epsilon_2=0.
+\]
+
+Evaluate the same residual code, but all scalars are replaced by $\hat{\cdot}$.
+Operator overloading makes the chain rule automatic.
+\end{frame}
+
+\begin{frame}{Hyperdual arithmetic: why the product rule appears for free}
+\justifying
+Let:
+\[
+\hat{a}=a_0+\epsilon_1 a_1+\epsilon_2 a_2,
+\qquad
+\hat{b}=b_0+\epsilon_1 b_1+\epsilon_2 b_2.
+\]
+
+Multiplication:
+\[
+\hat{a}\hat{b}
+=
+a_0b_0
++\epsilon_1(a_1b_0+a_0b_1)
++\epsilon_2(a_2b_0+a_0b_2).
+\]
+
+Those $\epsilon_1,\epsilon_2$ coefficients are exactly the directional derivatives.
+\end{frame}
+
+\begin{frame}{Hyperdual seeding: two Jacobian columns per residual evaluation}
+\justifying
+Pick two DOFs $j$ and $j+1$:
+\[
+\hat{d}_j=d_j+\epsilon_1,\qquad
+\hat{d}_{j+1}=d_{j+1}+\epsilon_2,
+\quad
+\hat{d}_k=d_k \; (k\neq j,j+1).
+\]
+
+Then:
+\[
+\hat{\Rvec}_i
+=
+R_i
++\epsilon_1\frac{\partial R_i}{\partial d_j}
++\epsilon_2\frac{\partial R_i}{\partial d_{j+1}}.
+\]
+
+So extract columns:
+\[
+\KT(:,j)=\left[\hat{\Rvec}\right]_{\epsilon_1},\qquad
+\KT(:,j+1)=\left[\hat{\Rvec}\right]_{\epsilon_2}.
+\]
+\end{frame}
+
+\begin{frame}{Hyperdual: implementation pattern}
+\justifying
+Pseudo-code (2-column seeding):
+\begin{lstlisting}[language=Fortran]
+do j=1,ndof,2
+  call seed(u, j, j+1)     ! set e1/e2 on two dofs
+  call residual_hd(u_hd, R_hd)
+  K(:,j)   = R_hd%e1
+  K(:,j+1) = R_hd%e2
+end do
+\end{lstlisting}
+Notes:
+\begin{itemize}
+  \item Each operator and intrinsic used by the residual must be overloaded.
+  \item The residual code is unchanged except for type replacement.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Hyperdual cost model (for n=12)}
+\justifying
+With 2 columns per pass:
+\[
+\text{residual calls} \approx \left\lceil\frac{n}{2}\right\rceil=6.
+\]
+
+Compare:
+\[
+\text{FD: } n+1\approx 13,\quad
+\text{complex-step: } n=12,\quad
+\text{hyperdual 2-ch: } 6.
+\]
+
+Caveat: each arithmetic op costs more (value + 2 derivative channels).
+So runtime depends on: \textbf{(calls)} $\times$ \textbf{(cost per call)}.
+\end{frame}
+
+\begin{frame}{Hyperdual: code anchor (file)}
+\justifying
+Your hyperdual implementation is in:
+\[
+\texttt{src/beam\_uel.f90}
+\]
+(it begins with \texttt{module hyperdual\_mod}.)
+
+\PlaceholderBox{INSERT CODE SNAPSHOT}{Show hd type definition + operator overload interfaces; point out val/e1/e2.}
+\end{frame}
+
+\begin{frame}{Hyperdual: extraction pattern (where AMATRX is filled)}
+\justifying
+\PlaceholderBox{INSERT THE “SEED LOOP” SNIPPET}{
+Show the loop: \texttt{do j=1,12,2} seeding \texttt{e1} and \texttt{e2}, evaluate residual once, then fill columns $j$ and $j+1$.}
+\end{frame}
+
+\begin{frame}{STOP 4 --- Hyperdual method summary}
+\justifying
+\textbf{Math:}
+forward-mode AD with two seed directions:
+\[
+\hat{x}=x+\epsilon_1 x_{,1}+\epsilon_2 x_{,2}.
+\]
+
+\textbf{Pros:}
+robust (differentiates the exact code path), fewer residual calls ($\sim n/2$).
+
+\textbf{Cons:}
+implementation overhead: every op/function used must be overloaded correctly.
+
+\PlaceholderBox{INSERT MINI TABLE}{
+Representative run vs Exact: runtime ratio, Newton iters, solution error.}
+\end{frame}
+
+% =============================================================================
+% METHOD 5: OTI (Truncated Taylor / Polynomial Algebra AD)
+% =============================================================================
+\begin{frame}{Method 5 --- OTI: what it is (conceptually)}
+\justifying
+OTI can be viewed as propagating a truncated Taylor expansion in multiple independent directions.
+
+First-order (Jacobian-level) OTI looks like:
+\[
+\hat{x}=x_0 + \epsilon_1 x_1 + \epsilon_2 x_2 + \cdots + \epsilon_p x_p,
+\quad \epsilon_k^2=0,\quad \epsilon_i\epsilon_j=0 \ (i\neq j).
+\]
+
+That is algebraically equivalent to multi-direction dual numbers, but typically implemented as a compact coefficient array.
+\end{frame}
+
+\begin{frame}{OTI arithmetic: polynomial viewpoint}
+\justifying
+If you store coefficients:
+\[
+\hat{x} = x_0 + \sum_{k=1}^{p}\epsilon_k x_k,
+\]
+then for smooth $f$:
+\[
+f(\hat{x}) = f(x_0) + \sum_{k=1}^{p}\epsilon_k f'(x_0)x_k.
+\]
+
+So once you implement arithmetic + elementary functions in this truncated algebra, chain rule is automatic.
+
+Packing $p$ directions gives $p$ Jacobian columns per residual evaluation.
+\end{frame}
+
+\begin{frame}{OTI seeding and extraction}
+\justifying
+Seed $p$ DOFs per call:
+\[
+\hat{d}_{j+k} = d_{j+k} + \epsilon_{k+1},\qquad k=0,\ldots,p-1.
+\]
+
+Evaluate:
+\[
+\hat{\Rvec}_i
+=
+R_i + \sum_{k=1}^{p} \epsilon_k \frac{\partial R_i}{\partial d_{j+k-1}}.
+\]
+
+Extract:
+\[
+\KT(:,j+k-1)=\left[\hat{\Rvec}\right]_{\epsilon_k}.
+\]
+
+So: OTI is “hyperdual but with an arbitrary number of channels”.
+\end{frame}
+
+\begin{frame}{OTI cost model}
+\justifying
+If you pack $p$ columns per call:
+\[
+\text{residual calls}\approx \left\lceil\frac{n}{p}\right\rceil.
+\]
+
+For $n=12$:
+\[
+p=2 \Rightarrow 6 \text{ calls (same as your hyperdual)},
+\quad
+p=3 \Rightarrow 4 \text{ calls},
+\quad
+p=4 \Rightarrow 3 \text{ calls}.
+\]
+
+Trade-off: cost per call increases with $p$ because you propagate more channels.
+\end{frame}
+
+\begin{frame}{OTI: code anchor (file)}
+\justifying
+Point this to your OTI implementation file (edit to match your repo), e.g.:
+\[
+\texttt{uel/beam\_uel\_oti.f90}
+\]
+
+\PlaceholderBox{INSERT CODE SNAPSHOT}{Show OTI type definition (value + coefficient array) and the seeding/extraction logic that fills AMATRX.}
+\end{frame}
+
+\begin{frame}{STOP 5 --- OTI method summary}
+\justifying
+\textbf{Math:}
+truncated Taylor algebra with $p$ independent first-order channels.
+
+\textbf{Pros:}
+generalizes hyperdual (pack $p$ columns per pass), robust chain-rule derivatives.
+
+\textbf{Cons:}
+more code + heavier arithmetic; must overload every function used in residual.
+
+\PlaceholderBox{INSERT MINI TABLE}{
+Representative run vs Exact: runtime ratio, Newton iters, solution error, and scaling as $p$ increases.}
+\end{frame}
+
+% =============================================================================
+% BENCHMARKING DETAILS
+% =============================================================================
+\begin{frame}{Benchmarking: error metrics}
+\justifying
+We compare each method against the exact tangent (reference):
+\[
+\epsilon_K = \frac{\|\Kmat^{(m)}-\Kmat^{(exact)}\|_F}{\|\Kmat^{(exact)}\|_F},
+\quad
+\epsilon_u = \frac{\|\dvec^{(m)}-\dvec^{(exact)}\|}{\|\dvec^{(exact)}\|}.
+\]
+For Newton behavior, we also track:
+\[
+N_{it} = \text{total iterations},\quad \|\Rvec\| \text{ per iteration}.
+\]
+\end{frame}
+
+\begin{frame}{Benchmarking: runtime model}
+\justifying
+Runtime is dominated by residual evaluations:
+\[
+t_{total} \approx N_{elem} \times N_{inc} \times N_{calls} \times t_{residual}.
+\]
+Where $N_{calls}$ is:
+\begin{itemize}
+  \item Exact: $\sim 1$
+  \item FD: $n+1$
+  \item Complex-step: $n$
+  \item Hyperdual (2-ch): $\lceil n/2 \rceil$
+\end{itemize}
+This predicts why FD is slow and why hyperdual can be competitive.
+\end{frame}
+
+\begin{frame}{Benchmarking: what we report}
+\justifying
+For each method and mesh/load sweep, we report:
+\begin{itemize}
+  \item Wall-clock runtime
+  \item Total Newton iterations
+  \item Final displacement error $\epsilon_u$
+  \item Tangent error $\epsilon_K$ (if exported)
+\end{itemize}
+This produces the summary table and plots in the next section.
+\end{frame}
+
+% =============================================================================
+% COMPARISON: PLOTS / RESULTS PLACEHOLDERS
+% =============================================================================
+\begin{frame}{Plot placeholders --- runtime}
+\justifying
+\MaybeFig{figs/runtime_vs_elements.png}{0.92}{Runtime vs number of elements (Exact, FD, Hypercomplex, Hyperdual, OTI).}
+\MaybeFig{figs/runtime_vs_increments.png}{0.92}{Runtime vs number of increments (fixed mesh, fixed load).}
+\end{frame}
+
+\begin{frame}{Plot placeholders --- solution error}
+\justifying
+\MaybeFig{figs/error_u_vs_elements.png}{0.92}{Relative displacement error vs number of elements (methods vs Exact).}
+\MaybeFig{figs/error_u_vs_load.png}{0.92}{Relative displacement error vs load magnitude (methods vs Exact).}
+\end{frame}
+
+\begin{frame}{Plot placeholders --- Newton behavior}
+\justifying
+\MaybeFig{figs/newton_iters_vs_increment.png}{0.92}{Newton iterations per increment (methods compared).}
+\MaybeFig{figs/residual_norm_vs_iter.png}{0.92}{Residual norm vs iteration (representative increment).}
+\end{frame}
+
+\begin{frame}{Comparison table (what you should show on one slide)}
+\justifying
+\PlaceholderBox{INSERT A SUMMARY TABLE}{
+Columns:
+Method | Runtime | Residual calls/elem | Cost/call | Newton iters | $\epsilon_u$ | Notes (stability / caveats).}
+\end{frame}
+
+% =============================================================================
+% PRACTICAL: EXPERIMENT DESIGN
+% =============================================================================
+\begin{frame}{Experiment design: sweeps that actually answer questions}
+\justifying
+You want controlled sweeps where only one variable changes:
+
+\textbf{Mesh sweep:}
+\[
+N_e \in \{5,10,20,40,80,160\}
+\quad (\text{fixed load, fixed increments}).
+\]
+
+\textbf{Load sweep:}
+\[
+|F|\in \{10^k\},\; k=\ldots
+\quad (\text{fixed mesh, fixed increments}).
+\]
+
+\textbf{Increment sweep:}
+\[
+N_{inc}\in\{5,10,20,50,100\}
+\quad (\text{fixed mesh, fixed load}).
+\]
+
+Each sweep outputs: runtime, Newton iters, $\epsilon_u$ per method.
+\end{frame}
+
+\begin{frame}{What to export for post-processing (minimum viable data)}
+\justifying
+Export one CSV per run with:
+\begin{itemize}
+\item method name,
+\item $N_e$, $F$, $N_{inc}$,
+\item runtime,
+\item total Newton iterations (and optionally per increment),
+\item final displacement vector norm + solution error vs Exact.
+\end{itemize}
+
+\PlaceholderBox{INSERT “CSV SCHEMA” BOX}{
+Show a tiny table with column names and units.}
+\end{frame}
+
+% =============================================================================
+% TROUBLESHOOTING
+% =============================================================================
+\begin{frame}{Troubleshooting (because Abaqus is a personality disorder)}
+\justifying
+Common failure modes:
+\begin{itemize}
+  \item license / environment issues,
+  \item Fortran compiler flags mismatch,
+  \item FD instability from bad $h$ scaling,
+  \item hypercomplex breaks if residual path is not complex-safe,
+  \item AD/OTI breaks if an operation lacks an overload.
+\end{itemize}
+
+\PlaceholderBox{INSERT YOUR TOP 3 ERROR MESSAGES}{
+Paste the exact terminal output line(s) and your fix.}
+\end{frame}
+
+% =============================================================================
+% TAKEAWAYS
+% =============================================================================
+\begin{frame}{Takeaways}
+\justifying
+\begin{itemize}
+  \item $\Rvec$ defines physics; $\KT$ defines how efficiently Newton finds equilibrium.
+  \item Exact is the benchmark.
+  \item FD is universal but step-size sensitive and noisy.
+  \item Hypercomplex (complex-step) is accurate if the code path is analytic; multicomplex packs directions.
+  \item Hyperdual and OTI are forward AD families: robust chain-rule derivatives, fewer residual calls by packing channels.
+\end{itemize}
+
+\vspace{0.75em}
+\centering
+\Large Questions?
+\end{frame}
+
+\end{document}
