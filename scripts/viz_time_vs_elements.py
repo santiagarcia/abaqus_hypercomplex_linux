@@ -60,21 +60,22 @@ def main():
             # Check last row
             last_row = df_hist.iloc[-1]
             
-            # Check frame number. Should be equal to ninc (10)
-            # But let's just check if value is present (not NaN)
+            # Strict Check: All methods must be valid
+            all_valid = True
             
             for t_method, h_suffix in method_map.items():
                 col = f'u2_{h_suffix}'
-                if col in df_hist.columns:
-                    val = last_row[col]
-                    # Check for NaN
-                    if pd.notna(val):
-                        valid_runs.add((tag, t_method))
-                    # else:
-                    #     print(f"Run {tag} method {t_method} incomplete.")
-                else:
-                    # Column missing means method didn't run or wasn't extracted
-                    pass
+                if col not in df_hist.columns:
+                    all_valid = False
+                    break
+                val = last_row[col]
+                if pd.isna(val):
+                    all_valid = False
+                    break
+            
+            if all_valid:
+                for t_method in method_map.keys():
+                    valid_runs.add((tag, t_method))
 
         except Exception as e:
             print(f"Error reading {hist_file}: {e}")
