@@ -82,7 +82,7 @@ def main():
     if 'err_cs' in df_results.columns:
         plt.plot(df_results['nelems'], df_results['err_cs'], '^-', label='Complex Step')
     if 'err_otis' in df_results.columns:
-        plt.plot(df_results['nelems'], df_results['err_otis'], 'd-', label='Otis (HyperDual)')
+        plt.plot(df_results['nelems'], df_results['err_otis'], 'd-', label='OTIS (HyperDual)')
 
     plt.xlabel('Number of Elements', fontsize=12)
     plt.ylabel('Final Error (Relative to Exact)', fontsize=12)

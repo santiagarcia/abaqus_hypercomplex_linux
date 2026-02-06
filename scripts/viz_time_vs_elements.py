@@ -105,7 +105,7 @@ def main():
         'HD': 'HyperDual (UEL)',
         'FD': 'Finite Difference',
         'CS': 'Complex Step',
-        'Otis': 'Otis (HyperDual)',
+        'Otis': 'OTIS (HyperDual)',
         'Exact': 'Exact UEL'
     }
     
